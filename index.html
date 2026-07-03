@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>모멘텀 투자 대시보드 v1</title>
+<title>모멘텀 투자 대시보드 v1.1</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -128,7 +128,7 @@
   <!-- ===== 헤더 ===== -->
   <header>
     <div class="brand">
-      <h1>모멘텀 투자 대시보드<span class="ver">v1.0</span></h1>
+      <h1>모멘텀 투자 대시보드<span class="ver">v1.1</span></h1>
       <p>좋은 기업 × 적정 가격 × 살아있는 모멘텀 — 세 가지가 모일 때만 진입한다</p>
     </div>
     <div class="spacer"></div>
@@ -176,8 +176,12 @@
   <details class="mgr">
     <summary>종목 관리</summary>
     <div class="body">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <button class="btn" onclick="computeScores()" id="btnScore">진단점수 자동 계산</button>
+        <span style="font-size:11px;color:var(--dim)">Finnhub 재무지표 기반 자체 점수 (성장 30 · 수익 25 · 안전 20 · 현금 15 · 독점 10) — 월 1회 갱신 권장</span>
+      </div>
       <table class="stk">
-        <thead><tr><th>티커</th><th>종목명</th><th>카테고리</th><th>진단점수</th><th>기준선</th><th></th></tr></thead>
+        <thead><tr><th>티커</th><th>종목명</th><th>카테고리</th><th>진단점수</th><th>점수 상세</th><th>계산일</th><th>기준선</th><th></th></tr></thead>
         <tbody id="stockRows"></tbody>
       </table>
       <div class="addrow">
@@ -194,7 +198,8 @@
 
   <footer>
     ⚠️ 본 대시보드의 신호는 이동평균 기반 규칙의 기계적 판정이며 투자 판단의 보조 도구입니다. 특정 종목의 매수·매도를 권유하지 않으며, 수익을 보장하지 않습니다. 최종 투자 결정과 책임은 본인에게 있습니다.<br>
-    데이터: Twelve Data (일봉) · 시장 체제: bear_market_checks 테이블 연동 · 신호 규칙: 정배열 + 기준선(50/60일) 종가 이탈 매도 + 눌림목(20일/50일선) 대기
+    데이터: Twelve Data (일봉) · Finnhub (재무지표) · 시장 체제: bear_market_checks 테이블 연동 · 신호 규칙: 정배열 + 기준선(50/60일) 종가 이탈 매도 + 눌림목(20일/50일선) 대기<br>
+    진단점수는 과거~현재(TTM) 재무 기반 자체 산출 점수로, 미래 컨센서스를 반영하는 외부 유료 점수와 다를 수 있습니다.
   </footer>
 </div>
 
@@ -209,6 +214,8 @@
 const SUPABASE_URL      = "https://vpkkawfrtxsqadjpszfk.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_fg4aV0duiUkxDEYzIrqX4g__eu03dbK";
 const TWELVE_DATA_KEY   = "45fdc5efd76949668a724c1fe830f726";
+/* 진단점수 엔진용: https://finnhub.io 무료 가입 후 API 키 발급 (분당 60회) */
+const FINNHUB_KEY       = "d93k0tpr01qgqnublet0d93k0tpr01qgqnubletg";
 
 /* 신호 규칙 파라미터 (원하면 조정 가능) */
 const RULE = {
@@ -476,12 +483,19 @@ function renderChart(){
 }
 
 function renderStockTable(){
-  $('stockRows').innerHTML = stocks.map(s=>`
+  $('stockRows').innerHTML = stocks.map(s=>{
+    const d = s.score_detail;
+    const detail = d ? `성${d.growth} 수${d.profit} 안${d.safety} 현${d.cash} 독${d.moat}` : '-';
+    return `
     <tr>
       <td>${s.ticker}</td><td class="k">${s.name}</td><td class="k">${s.category||'-'}</td>
-      <td>${s.diagnosis_score||'-'}</td><td>${s.baseline_ma}일</td>
+      <td><b>${s.diagnosis_score||'-'}</b></td>
+      <td style="font-size:11px;color:var(--muted)">${detail}</td>
+      <td style="font-size:11px;color:var(--dim)">${s.score_updated||'-'}</td>
+      <td>${s.baseline_ma}일</td>
       <td><button class="del" onclick="removeStock('${s.ticker}')">삭제</button></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 function renderAll(){
@@ -549,6 +563,75 @@ async function removeStock(t){
   const {error} = await db.from('momentum_stocks').update({active:false}).eq('ticker', t);
   if(error){ status('삭제 오류: '+error.message); return; }
   if(selected===t) selected=null;
+  await loadStocks(); computeAll(); renderAll();
+}
+
+/* ---------- 7. 자체 진단점수 엔진 (Finnhub 재무지표) ---------- */
+/* 구간 채점 도우미: 값이 클수록 좋은 지표 */
+function grade(val, bands){ // bands: [[기준값, 점수], ...] 높은 기준부터
+  if(val==null || isNaN(val)) return 0;
+  for(const [th, pt] of bands) if(val >= th) return pt;
+  return 0;
+}
+/* 값이 작을수록 좋은 지표 (부채비율 등) */
+function gradeLow(val, bands){ // bands: [[기준값, 점수], ...] 낮은 기준부터
+  if(val==null || isNaN(val)) return 0;
+  for(const [th, pt] of bands) if(val <= th) return pt;
+  return 0;
+}
+
+function scoreFromMetrics(m){
+  // ── 성장성 30점: 매출 성장률 18 + EPS 성장률 12
+  const growth =
+    grade(m.revenueGrowthTTMYoy, [[40,18],[25,15],[15,11],[5,7],[0,3]]) +
+    grade(m.epsGrowthTTMYoy,     [[50,12],[25,9],[10,6],[0,3]]);
+  // ── 수익성 25점: 영업이익률 13 + ROE 12
+  const profit =
+    grade(m.operatingMarginTTM, [[25,13],[15,10],[5,7],[0,4]]) +
+    grade(m.roeTTM,             [[20,12],[10,9],[0,5]]);
+  // ── 재무 안전성 20점: 부채/자본 10 + 유동비율 10 (낮을수록/높을수록 좋음)
+  const safety =
+    gradeLow(m['totalDebt/totalEquityQuarterly'], [[0.3,10],[0.8,8],[1.5,5],[999,2]]) +
+    grade(m.currentRatioQuarterly, [[2,10],[1.5,8],[1,5],[0,2]]);
+  // ── 현금창출력 15점: FCF 흑자 8 + P/FCF 적정 7
+  const fcfPS = m.freeCashFlowPerShareTTM;
+  const pfcf  = m.pfcfShareTTM;
+  const cash =
+    (fcfPS!=null && fcfPS>0 ? 8 : 0) +
+    (pfcf!=null && pfcf>0 ? gradeLow(pfcf, [[40,7],[80,4],[9999,2]]) : 0);
+  // ── 독점력(근사) 10점: 매출총이익률
+  const moat = grade(m.grossMarginTTM, [[50,10],[35,7],[20,4],[0,1]]);
+
+  return { total: growth+profit+safety+cash+moat,
+           growth, profit, safety, cash, moat };
+}
+
+async function computeScores(){
+  if(FINNHUB_KEY.includes('여기에')){ status('⚠️ Finnhub API 키를 먼저 설정하세요. (finnhub.io 무료 가입)'); return; }
+  const btn = $('btnScore'); btn.disabled = true;
+  let ok=0, fail=0, i=0;
+  const today = new Date().toISOString().slice(0,10);
+  for(const s of stocks){
+    i++;
+    status(`🧮 ${s.ticker} 재무지표 분석 중… (${i}/${stocks.length})`);
+    try{
+      const url = `https://finnhub.io/api/v1/stock/metric?symbol=${s.ticker}&metric=all&token=${FINNHUB_KEY}`;
+      const res = await fetch(url);
+      const j = await res.json();
+      if(!j.metric || Object.keys(j.metric).length===0) throw new Error('지표 없음');
+      const sc = scoreFromMetrics(j.metric);
+      const {error} = await db.from('momentum_stocks').update({
+        diagnosis_score: sc.total,
+        score_detail: {growth:sc.growth, profit:sc.profit, safety:sc.safety, cash:sc.cash, moat:sc.moat},
+        score_updated: today
+      }).eq('ticker', s.ticker);
+      if(error) throw error;
+      ok++;
+    }catch(e){ console.error(s.ticker, e); fail++; }
+    await new Promise(r=>setTimeout(r,1100)); // 분당 60회 제한 여유
+  }
+  status(`✅ 진단점수 계산 완료 — 성공 ${ok} / 실패 ${fail} (기준일 ${today})`);
+  btn.disabled = false;
   await loadStocks(); computeAll(); renderAll();
 }
 
