@@ -1,0 +1,25 @@
+name: 한국 종목 시세 수집
+
+on:
+  schedule:
+    # 평일 07:30 UTC = 한국시간 16:30 (KOSPI/KOSDAQ 장마감 15:30 이후 반영)
+    - cron: '30 7 * * 1-5'
+  workflow_dispatch:   # Actions 탭에서 수동 실행 버튼 활성화
+
+jobs:
+  update-kr-prices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install finance-datareader requests
+
+      - name: 한국 시세 수집 및 Supabase 저장
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: python scripts/update_prices_kr.py
