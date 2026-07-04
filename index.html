@@ -1,9 +1,10 @@
 <!DOCTYPE html>
+<!-- v3.0 · 진단점수 이력 저장 + 추세 차트 -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>모멘텀 투자 대시보드 v1.1</title>
+<title>모멘텀 투자 대시보드 v3.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -128,7 +129,7 @@
   <!-- ===== 헤더 ===== -->
   <header>
     <div class="brand">
-      <h1>모멘텀 투자 대시보드<span class="ver">v1.1</span></h1>
+      <h1>모멘텀 투자 대시보드<span class="ver">v3.0</span></h1>
       <p>좋은 기업 × 적정 가격 × 살아있는 모멘텀 — 세 가지가 모일 때만 진입한다</p>
     </div>
     <div class="spacer"></div>
@@ -169,6 +170,16 @@
       </div>
       <div class="chartbox"><canvas id="chart"></canvas></div>
       <div class="legendnote">종가(흰색) · 20일선(황색) · 50일선(청색) · 60일선(회색) — 최근 120거래일 · 매도 규칙: <b>종가 기준</b> 기준선 이탈 시</div>
+    </div>
+
+    <!-- 진단점수 추세 (v3) -->
+    <div class="detail" style="margin-top:14px">
+      <div class="head">
+        <span class="tk">진단점수 추세</span>
+        <span class="info">누적 막대 = 총점 · 색으로 성장/수익/안전/현금/독점 구성 변화를 추적</span>
+      </div>
+      <div class="chartbox" style="height:240px"><canvas id="scoreChart"></canvas></div>
+      <div class="legendnote" id="scoreNote">주간 진단점수 변화 — 매주 자동 갱신될 때마다 막대가 하나씩 쌓입니다.</div>
     </div>
   </section>
 
@@ -228,6 +239,7 @@ const RULE = {
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let stocks = [], priceMap = {}, computed = {}, selected = null, chartObj = null;
 let marketRed = false;
+let scoreHist = {}, scoreHistOK = true, scoreChartObj = null;   // v3 진단점수 이력
 
 const $ = id => document.getElementById(id);
 const fmt = n => n==null ? '-' : Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -243,8 +255,27 @@ async function init(){
   await loadBearStatus();
   await loadStocks();
   await loadPrices();
+  await loadScoreHistory();
   computeAll();
   renderAll();
+}
+
+/* ---------- 진단점수 이력 로드 (v3) ---------- */
+async function loadScoreHistory(){
+  scoreHist = {};
+  try{
+    const {data, error} = await db.from('momentum_score_history')
+      .select('ticker, check_date, diagnosis_score, score_detail')
+      .order('check_date', {ascending:true});
+    if(error) throw error;
+    for(const r of (data||[])){
+      (scoreHist[r.ticker] = scoreHist[r.ticker] || []).push(r);
+    }
+    scoreHistOK = true;
+  }catch(e){
+    scoreHistOK = false;   // 테이블 미생성 등 — 대시보드는 계속 동작
+    console.warn('진단점수 이력 로드 실패(테이블 확인):', e.message);
+  }
 }
 
 /* ---------- 1. 베어마켓 시장 체제 ---------- */
@@ -480,6 +511,55 @@ function renderChart(){
       }
     }
   });
+  renderScoreChart();
+}
+
+/* ---------- 진단점수 추세 차트 (v3) ---------- */
+function renderScoreChart(){
+  const note = $('scoreNote');
+  if(scoreChartObj){ scoreChartObj.destroy(); scoreChartObj = null; }
+
+  if(!scoreHistOK){
+    note.innerHTML = '⚠️ 이력 테이블(<b>momentum_score_history</b>)이 아직 없습니다 — <b>score_history_setup.sql</b>을 Supabase SQL 편집기에서 한 번 실행하세요.';
+    return;
+  }
+  const rows = scoreHist[selected] || [];
+  if(rows.length === 0){
+    note.textContent = '아직 저장된 점수 이력이 없습니다 — 「종목 관리 → 진단점수 자동 계산」을 실행하면 오늘 점수부터 쌓입니다.';
+    return;
+  }
+
+  const labels = rows.map(r => r.check_date.slice(2));                    // yy-mm-dd
+  const comp = k => rows.map(r => (r.score_detail && r.score_detail[k] != null) ? r.score_detail[k] : 0);
+  const last = rows[rows.length-1];
+  const prev = rows.length > 1 ? rows[rows.length-2] : null;
+  const delta = prev ? last.diagnosis_score - prev.diagnosis_score : null;
+  note.innerHTML = `총 ${rows.length}개 시점 · 최근 <b>${last.diagnosis_score}점</b>`
+    + (delta!=null ? ` (직전 대비 <b class="${delta>=0?'up':'dn'}">${delta>=0?'+':''}${delta}</b>)` : '')
+    + (rows.length===1 ? ' — 매주 갱신될 때마다 막대가 늘어납니다.' : '');
+
+  const D = (label, k, color) => ({label, data:comp(k), backgroundColor:color, stack:'s', borderWidth:0, maxBarThickness:46});
+  scoreChartObj = new Chart($('scoreChart'), {
+    type:'bar',
+    data:{ labels, datasets:[
+      D('성장성','growth','#34D399'),
+      D('수익성','profit','#60A5FA'),
+      D('안전성','safety','#F5B84B'),
+      D('현금','cash','#FBBF24'),
+      D('독점','moat','#A78BFA'),
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{color:'#8A97AC',boxWidth:12,font:{size:11}}},
+        tooltip:{callbacks:{footer:items=>{let t=0;items.forEach(i=>t+=i.parsed.y);return '총점 '+t+'점';}}}
+      },
+      scales:{
+        x:{stacked:true, ticks:{color:'#5B6880',font:{size:10}}, grid:{display:false}},
+        y:{stacked:true, min:0, max:100, ticks:{color:'#5B6880',stepSize:20,font:{size:10,family:'IBM Plex Mono'}}, grid:{color:'rgba(30,42,66,.5)'}}
+      }
+    }
+  });
 }
 
 function renderStockTable(){
@@ -620,19 +700,25 @@ async function computeScores(){
       const j = await res.json();
       if(!j.metric || Object.keys(j.metric).length===0) throw new Error('지표 없음');
       const sc = scoreFromMetrics(j.metric);
+      const detail = {growth:sc.growth, profit:sc.profit, safety:sc.safety, cash:sc.cash, moat:sc.moat};
       const {error} = await db.from('momentum_stocks').update({
         diagnosis_score: sc.total,
-        score_detail: {growth:sc.growth, profit:sc.profit, safety:sc.safety, cash:sc.cash, moat:sc.moat},
+        score_detail: detail,
         score_updated: today
       }).eq('ticker', s.ticker);
       if(error) throw error;
+      // v3: 이력 저장 (테이블 없으면 조용히 건너뜀 — 본 계산은 성공 처리)
+      const {error:hErr} = await db.from('momentum_score_history')
+        .upsert({ticker:s.ticker, check_date:today, diagnosis_score:sc.total, score_detail:detail},
+                {onConflict:'ticker,check_date'});
+      if(hErr) console.warn('이력 저장 실패(테이블 확인):', hErr.message);
       ok++;
     }catch(e){ console.error(s.ticker, e); fail++; }
     await new Promise(r=>setTimeout(r,1100)); // 분당 60회 제한 여유
   }
   status(`✅ 진단점수 계산 완료 — 성공 ${ok} / 실패 ${fail} (기준일 ${today})`);
   btn.disabled = false;
-  await loadStocks(); computeAll(); renderAll();
+  await loadStocks(); await loadScoreHistory(); computeAll(); renderAll();
 }
 
 init();
