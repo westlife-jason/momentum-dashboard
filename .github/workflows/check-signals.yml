@@ -1,0 +1,29 @@
+name: 신호 전환 알림
+
+on:
+  schedule:
+    # 한국 장마감 반영 후: 08:00 UTC = 17:00 KST
+    - cron: '0 8 * * 1-5'
+    # 미국 장마감 반영 후: 22:30 UTC = 다음날 07:30 KST
+    - cron: '30 22 * * 1-5'
+  workflow_dispatch:   # Actions 탭에서 수동 실행 버튼 활성화
+
+jobs:
+  check-signals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install requests
+
+      - name: 신호 재계산 및 텔레그램 알림
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/notify_signals.py
