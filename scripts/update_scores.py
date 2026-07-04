@@ -1,7 +1,9 @@
 """
-모멘텀 대시보드 v2 - 주간 진단점수 자동 갱신
+모멘텀 대시보드 v3 - 주간 진단점수 자동 갱신 + 이력 적재
 GitHub Actions가 매주 월요일 실행합니다. (수동 실행: python scripts/update_scores.py)
 채점 기준은 대시보드 HTML의 scoreFromMetrics()와 동일합니다.
+갱신할 때마다 momentum_score_history 테이블에 (ticker, check_date) 이력을 남깁니다.
+(이력 테이블은 score_history_setup.sql 로 먼저 생성해야 합니다.)
 """
 import os, time, requests
 from datetime import date
@@ -95,6 +97,22 @@ def update_stock(ticker, sc):
     )
     r.raise_for_status()
 
+def save_history(ticker, sc):
+    """v3: 진단점수 이력 테이블에 (ticker, check_date) 기준 upsert."""
+    r = requests.post(
+        f"{SUPABASE_URL}/rest/v1/momentum_score_history",
+        headers={**HEADERS, "Prefer": "resolution=merge-duplicates"},
+        params={"on_conflict": "ticker,check_date"},
+        json={
+            "ticker": ticker,
+            "check_date": date.today().isoformat(),
+            "diagnosis_score": sc["total"],
+            "score_detail": {k: sc[k] for k in ("growth","profit","safety","cash","moat")},
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+
 def main():
     tickers = get_active_tickers()
     print(f"대상 종목 {len(tickers)}개")
@@ -103,6 +121,10 @@ def main():
         try:
             sc = score_from_metrics(fetch_metrics(t))
             update_stock(t, sc)
+            try:
+                save_history(t, sc)          # v3: 이력 적재 (테이블 없으면 건너뜀)
+            except Exception as he:
+                print(f"      이력 저장 건너뜀({t}): {he}")
             print(f"[{i}/{len(tickers)}] {t} = {sc['total']}점 "
                   f"(성{sc['growth']} 수{sc['profit']} 안{sc['safety']} 현{sc['cash']} 독{sc['moat']})")
             ok += 1
