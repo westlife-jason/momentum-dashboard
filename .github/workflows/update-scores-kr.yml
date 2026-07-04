@@ -1,0 +1,26 @@
+name: 한국 진단점수 갱신
+
+on:
+  schedule:
+    # 매주 월요일 오전 8시 (한국시간) = 일요일 23:00 UTC (미국 점수 갱신과 동일 시각대)
+    - cron: '0 23 * * 0'
+  workflow_dispatch:   # Actions 탭에서 수동 실행 버튼 활성화
+
+jobs:
+  update-kr-scores:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install requests
+
+      - name: DART 재무제표 채점 및 Supabase 저장
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: python scripts/update_scores_kr.py
