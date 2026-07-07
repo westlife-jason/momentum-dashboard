@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- v3.1 · 한국 종목(원화) 지원 -->
+<!-- v3.4 · DRAM 사이클 모니터(스팟/계약가) -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>모멘텀 투자 대시보드 v3.1</title>
+<title>모멘텀 투자 대시보드 v3.4</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -31,6 +31,11 @@
   .btn:disabled{opacity:.45;cursor:default}
   .btn.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
   .btn.ghost:hover{color:var(--ink);border-color:var(--dim)}
+
+  /* 소유자 선택 */
+  .ownerbox{display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 10px}
+  .ownerbox span{font-size:13px}
+  .ownerbox select{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:5px 8px;font-size:12.5px;font-family:var(--sans);cursor:pointer}
 
   /* 시장 체제 배지 */
   .regime{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 14px}
@@ -76,6 +81,11 @@
   .sig.lock{background:rgba(248,113,113,.08);color:#FCA5A5;border:1px dashed rgba(248,113,113,.4)}
   .reason{font-size:11px;color:var(--dim);margin-top:6px;min-height:16px}
 
+  /* 눌림목 매수 타이밍 가이드 */
+  .buytip{margin-top:10px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:8px;padding:9px 11px;font-size:11px;color:#FCD34D;line-height:1.65}
+  .buytip b{color:var(--yellow)}
+  .buytip .step{color:#E8EEF7}
+
   /* 눌림목 레일 (시그니처 요소) */
   .rail{margin-top:14px}
   .rail .lbl{display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-bottom:4px;font-family:var(--mono)}
@@ -88,6 +98,18 @@
   .metrics .m{background:var(--panel2);border-radius:8px;padding:7px 8px;text-align:center}
   .metrics .v{font-family:var(--mono);font-size:13px;font-weight:600}
   .metrics .k{font-size:9.5px;color:var(--dim);margin-top:1px}
+
+  /* ===== DRAM 사이클 모니터 ===== */
+  .dram-head{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-bottom:12px}
+  .dram-sig{display:inline-flex;align-items:center;border-radius:8px;padding:5px 12px;font-size:13px;font-weight:700}
+  .dram-sig.buy{background:rgba(52,211,153,.12);color:var(--green);border:1px solid rgba(52,211,153,.35)}
+  .dram-sig.pull{background:rgba(251,191,36,.12);color:var(--yellow);border:1px solid rgba(251,191,36,.35)}
+  .dram-sig.sell{background:rgba(248,113,113,.14);color:var(--red);border:1px solid rgba(248,113,113,.45)}
+  .dram-vals{display:flex;flex-wrap:wrap;gap:16px;margin-left:auto;font-size:13px;color:var(--muted)}
+  .dram-vals b{font-family:var(--mono);color:var(--ink);font-size:15px}
+  .dram-admin{margin-top:14px;padding-top:14px;border-top:1px solid var(--panel2)}
+  .dram-admin .addrow input{width:120px}
+  .dram-admin .lbl{font-size:11px;color:var(--dim);margin-bottom:8px}
 
   /* ===== 상세 차트 ===== */
   section h2{font-size:15px;font-weight:900;margin:30px 0 12px;letter-spacing:-.3px}
@@ -129,10 +151,14 @@
   <!-- ===== 헤더 ===== -->
   <header>
     <div class="brand">
-      <h1>모멘텀 투자 대시보드<span class="ver">v3.1</span></h1>
+      <h1>모멘텀 투자 대시보드<span class="ver">v3.4</span></h1>
       <p>좋은 기업 × 적정 가격 × 살아있는 모멘텀 — 세 가지가 모일 때만 진입한다</p>
     </div>
     <div class="spacer"></div>
+    <label class="ownerbox" title="대시보드 소유자 — URL의 ?u= 값으로 사람별 종목을 봅니다">
+      <span>👤</span>
+      <select id="ownerSel" onchange="switchOwner(this.value)"></select>
+    </label>
     <div class="regime" id="regimeBox">
       <div class="dot u" id="regimeDot"></div>
       <div>
@@ -159,6 +185,36 @@
   <div class="grid" id="cardGrid">
     <div class="empty" id="emptyMsg">데이터를 불러오는 중입니다…</div>
   </div>
+
+  <!-- ===== DRAM 사이클 모니터 ===== -->
+  <section id="dramSec">
+    <h2>DRAM 사이클 모니터<span>스팟 &lt; 계약가 = 메모리 사이클 고점·종료 신호</span></h2>
+    <div class="detail">
+      <div class="dram-head">
+        <span class="tk" id="dramProduct" style="font-family:var(--mono);font-size:16px;font-weight:600">DDR4 8Gb</span>
+        <span class="dram-sig" id="dramSignal">불러오는 중…</span>
+        <div class="dram-vals">
+          <span>스팟 <b id="dramSpot">-</b></span>
+          <span>계약 <b id="dramContract">-</b></span>
+          <span id="dramGap"></span>
+          <span id="dramDate" style="color:var(--dim)"></span>
+        </div>
+      </div>
+      <div class="chartbox" style="height:260px"><canvas id="dramChart"></canvas></div>
+      <div class="legendnote" id="dramNote">스팟(초록) · 계약(황색 점선) — 스팟선이 계약선 아래로 내려가면 사이클 종료 경고입니다.</div>
+
+      <!-- 관리자 입력 (owner=jason 에게만 표시) -->
+      <div class="dram-admin" id="dramAdmin" style="display:none">
+        <div class="lbl">🔧 관리자 입력 — TrendForce 등에서 최신 스팟·계약가격을 주/월 1회 입력하세요 (같은 날짜는 덮어쓰기)</div>
+        <div class="addrow">
+          <input id="dramInDate" type="date" title="가격 기준일">
+          <input id="dramInSpot" type="number" step="0.001" placeholder="스팟가격 (예: 1.85)">
+          <input id="dramInContract" type="number" step="0.001" placeholder="계약가격 (예: 2.10)">
+          <button class="btn ghost" onclick="saveDram()">DRAM 가격 저장</button>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <!-- ===== 상세 차트 ===== -->
   <section id="detailSec" style="display:none">
@@ -240,6 +296,10 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let stocks = [], priceMap = {}, computed = {}, selected = null, chartObj = null;
 let marketRed = false;
 let scoreHist = {}, scoreHistOK = true, scoreChartObj = null;   // v3 진단점수 이력
+let dramRows = [], dramOK = true, dramChartObj = null;          // v3.4 DRAM 사이클
+const DRAM_PRODUCT = 'DDR4 8Gb';
+/* v3.2 소유자: URL의 ?u= 값(기본 jason). 사람별 종목 리스트를 나눔 */
+const currentOwner = ((new URLSearchParams(location.search)).get('u') || 'jason').trim() || 'jason';
 
 const $ = id => document.getElementById(id);
 const fmt = n => n==null ? '-' : Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -260,9 +320,11 @@ async function init(){
     return;
   }
   await loadBearStatus();
+  await loadOwners();
   await loadStocks();
   await loadPrices();
   await loadScoreHistory();
+  await loadDram();
   computeAll();
   renderAll();
 }
@@ -283,6 +345,92 @@ async function loadScoreHistory(){
     scoreHistOK = false;   // 테이블 미생성 등 — 대시보드는 계속 동작
     console.warn('진단점수 이력 로드 실패(테이블 확인):', e.message);
   }
+}
+
+/* ---------- DRAM 사이클 모니터 (v3.4) ---------- */
+async function loadDram(){
+  dramRows = [];
+  try{
+    const {data, error} = await db.from('dram_prices')
+      .select('price_date, product, spot, contract')
+      .eq('product', DRAM_PRODUCT)
+      .order('price_date', {ascending:true});
+    if(error) throw error;
+    dramRows = data || [];
+    dramOK = true;
+  }catch(e){
+    dramOK = false;   // 테이블 미생성 등 — 대시보드는 계속 동작
+    console.warn('DRAM 데이터 로드 실패(테이블 확인):', e.message);
+  }
+}
+
+function renderDram(){
+  const admin = $('dramAdmin'); if(admin) admin.style.display = (currentOwner==='jason') ? 'block' : 'none';
+  const note = $('dramNote'), badge = $('dramSignal');
+  if(dramChartObj){ dramChartObj.destroy(); dramChartObj = null; }
+  const setV = (sp,ct,dt)=>{ $('dramSpot').textContent=sp; $('dramContract').textContent=ct; $('dramDate').textContent=dt; };
+
+  if(!dramOK){
+    badge.className='dram-sig'; badge.textContent='테이블 없음';
+    note.innerHTML='⚠️ <b>dram_prices</b> 테이블이 아직 없습니다 — <b>dram_setup.sql</b>을 Supabase에서 실행하세요.';
+    setV('-','-',''); $('dramGap').textContent=''; return;
+  }
+  if(dramRows.length===0){
+    badge.className='dram-sig'; badge.textContent='데이터 없음';
+    note.textContent = (currentOwner==='jason')
+      ? '아래 관리자 입력으로 스팟·계약가격을 넣어주세요 (2개 이상 넣으면 추세선이 그려집니다).'
+      : '아직 입력된 DRAM 가격이 없습니다.';
+    setV('-','-',''); $('dramGap').textContent=''; return;
+  }
+
+  const last = dramRows[dramRows.length-1];
+  const spot = Number(last.spot), contract = Number(last.contract);
+  setV('$'+spot.toFixed(3), '$'+contract.toFixed(3), last.price_date);
+  const gapPct = (spot/contract - 1)*100;
+  $('dramGap').innerHTML = `괴리 <b class="${gapPct>=0?'up':'dn'}">${gapPct>=0?'+':''}${gapPct.toFixed(1)}%</b>`;
+
+  let cls, txt, msg;
+  if(spot < contract){
+    cls='sell'; txt='🔴 스팟 < 계약 — 사이클 종료 경고';
+    msg='스팟이 계약가 아래로 내려갔습니다 — 메모리 사이클 고점·종료 신호입니다. 반도체 비중 점검을 권합니다.';
+  } else if(gapPct <= 3){
+    cls='pull'; txt='🟡 스팟이 계약가에 근접 — 주의';
+    msg='스팟이 계약가에 바짝 붙었습니다 — 아래로 교차하면 사이클 종료 신호이니 주시하세요.';
+  } else {
+    cls='buy'; txt='🟢 스팟 > 계약 — 사이클 정상';
+    msg='스팟이 계약가보다 높습니다 — 메모리 업사이클이 살아있는 국면입니다.';
+  }
+  badge.className='dram-sig '+cls; badge.textContent=txt;
+  note.textContent = msg;
+
+  const labels = dramRows.map(r=>r.price_date.slice(2));
+  dramChartObj = new Chart($('dramChart'), {
+    type:'line',
+    data:{ labels, datasets:[
+      {label:'스팟(현물)', data:dramRows.map(r=>Number(r.spot)),     borderColor:'#34D399', borderWidth:2, pointRadius:2, tension:.15},
+      {label:'계약(고정)', data:dramRows.map(r=>Number(r.contract)), borderColor:'#F5B84B', borderWidth:2, borderDash:[5,4], pointRadius:2, tension:.15},
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
+      plugins:{legend:{labels:{color:'#8A97AC',boxWidth:14,font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#5B6880',maxTicksLimit:10,font:{size:10}},grid:{color:'rgba(30,42,66,.5)'}},
+        y:{ticks:{color:'#5B6880',font:{size:10,family:'IBM Plex Mono'}},grid:{color:'rgba(30,42,66,.5)'}}
+      }
+    }
+  });
+}
+
+async function saveDram(){
+  const d = $('dramInDate').value;
+  const sp = Number($('dramInSpot').value), ct = Number($('dramInContract').value);
+  if(!d || !sp || !ct){ status('⚠️ 날짜·스팟·계약가를 모두 입력하세요.'); return; }
+  const {error} = await db.from('dram_prices')
+    .upsert({price_date:d, product:DRAM_PRODUCT, spot:sp, contract:ct}, {onConflict:'product,price_date'});
+  if(error){ status('DRAM 저장 오류: '+error.message); return; }
+  ['dramInSpot','dramInContract'].forEach(id=>$(id).value='');
+  status(`✅ DRAM 가격 저장 완료 (${d})`);
+  await loadDram(); renderDram();
 }
 
 /* ---------- 1. 베어마켓 시장 체제 ---------- */
@@ -313,10 +461,22 @@ async function loadBearStatus(){
 /* ---------- 2. 종목 / 가격 로드 ---------- */
 async function loadStocks(){
   const {data, error} = await db.from('momentum_stocks')
-    .select('*').eq('active', true).order('ticker');
+    .select('*').eq('active', true).eq('owner', currentOwner).order('ticker');
   if(error){ status('종목 로드 오류: '+error.message); return; }
   stocks = data || [];
 }
+
+/* v3.2 소유자 목록 로드 → 헤더 드롭다운 채우기 */
+async function loadOwners(){
+  const {data} = await db.from('momentum_stocks').select('owner');
+  const set = new Set((data||[]).map(r=>r.owner).filter(Boolean));
+  set.add(currentOwner);   // 아직 종목 없는 신규 소유자도 보이게
+  const owners = [...set].sort();
+  const sel = $('ownerSel');
+  if(sel) sel.innerHTML = owners.map(o=>
+    `<option value="${o}" ${o===currentOwner?'selected':''}>${o}</option>`).join('');
+}
+function switchOwner(o){ location.search = '?u=' + encodeURIComponent(o); }
 
 async function loadPrices(){
   priceMap = {};
@@ -428,6 +588,24 @@ function railHTML(t, c){
   </div>`;
 }
 
+/* 눌림목(대기) 종목의 매수 타이밍 가이드 */
+function buyTip(s, c){
+  if(c.signal !== 'pull' || !c.hasData) return '';
+  const near20 = Math.abs(c.close/c.ma20 - 1)*100 <= RULE.pullbackNear;
+  const supName = near20 ? '20일선 (1차 눌림목)' : '50일선 (2차 눌림목)';
+  const supPx = px(s.ticker, near20 ? c.ma20 : c.ma50);
+  const basePx = px(s.ticker, c.basePrice);
+  const lock = marketRed
+    ? `<br>🔒 <b>지금은 시장 위험 등급</b> — 신규 매수는 잠금입니다. 시장이 정상으로 돌아온 뒤 진입하세요.`
+    : '';
+  return `
+  <div class="buytip">
+    <b>📍 매수 타이밍</b> — ${supName} <b>${supPx}</b> 부근<br>
+    <span class="step">①</span> <b>반등 확인 후</b> 진입 — 이 지지선에서 하락을 멈추고 <b>다시 올라설 때</b>(양봉·전일 고가 돌파) 분할 매수. 떨어지는 중엔 기다리세요.<br>
+    <span class="step">②</span> <b>손절선</b> — 종가가 ${s.baseline_ma}일선 <b>${basePx}</b> 아래로 내려가면 눌림목 실패 → 매수 보류·매도 규칙 적용.${lock}
+  </div>`;
+}
+
 function ddLabel(dd){
   if(dd==null) return '-';
   if(dd > -3) return dd.toFixed(1)+'%';
@@ -439,7 +617,7 @@ function ddLabel(dd){
 function renderCards(){
   const grid = $('cardGrid');
   if(!stocks.length){
-    grid.innerHTML = `<div class="empty">등록된 종목이 없습니다. Supabase에서 momentum_setup.sql을 실행했는지 확인하세요.</div>`;
+    grid.innerHTML = `<div class="empty"><b>${currentOwner}</b> 님의 종목이 아직 없습니다. 아래 <b>종목 관리</b>에서 종목을 추가해 주세요.</div>`;
     return;
   }
   grid.innerHTML = stocks.map(s=>{
@@ -459,6 +637,7 @@ function renderCards(){
       ${signalBadge(s,c)}
       <div class="reason">${c.reason||''}</div>
       ${railHTML(s.ticker,c)}
+      ${buyTip(s,c)}
       ${c.hasData?`
       <div class="metrics">
         <div class="m"><div class="v ${c.gap20>=RULE.overheatGap?'dn':''}">${c.gap20>=0?'+':''}${c.gap20.toFixed(1)}%</div><div class="k">이격도(20일)</div></div>
@@ -591,6 +770,7 @@ function renderAll(){
   renderStockTable();
   if(!selected && stocks.length) selected = stocks[0].ticker;
   renderChart();
+  renderDram();
 }
 
 /* ---------- 5. 시세 업데이트 (Twelve Data) ---------- */
@@ -637,21 +817,24 @@ async function addStock(){
   const t = $('fTicker').value.trim().toUpperCase();
   if(!t){ status('⚠️ 티커를 입력하세요.'); return; }
   const row = {
+    owner: currentOwner,
     ticker:t, name: $('fName').value.trim()||t,
     category: $('fCat').value.trim(),
     diagnosis_score: Number($('fScore').value)||0,
     baseline_ma: Number($('fBase').value)||50, active:true
   };
-  const {error} = await db.from('momentum_stocks').upsert(row);
+  const {error} = await db.from('momentum_stocks').upsert(row, {onConflict:'owner,ticker'});
   if(error){ status('추가 오류: '+error.message); return; }
   ['fTicker','fName','fCat','fScore'].forEach(id=>$(id).value='');
-  status(`✅ ${t} 추가 완료 — 시세 업데이트를 눌러 데이터를 받아오세요.`);
-  await loadStocks(); await loadPrices(); computeAll(); renderAll();
+  const auto = isKR(t) ? '한국 종목은 매일 자동수집으로 시세가 채워집니다.' : '시세 업데이트를 눌러 데이터를 받아오세요.';
+  status(`✅ ${t} 추가 완료 — ${auto}`);
+  await loadOwners(); await loadStocks(); await loadPrices(); computeAll(); renderAll();
 }
 
 async function removeStock(t){
   if(!confirm(t+' 종목을 목록에서 제거할까요? (가격 데이터는 유지됩니다)')) return;
-  const {error} = await db.from('momentum_stocks').update({active:false}).eq('ticker', t);
+  const {error} = await db.from('momentum_stocks').update({active:false})
+    .eq('ticker', t).eq('owner', currentOwner);
   if(error){ status('삭제 오류: '+error.message); return; }
   if(selected===t) selected=null;
   await loadStocks(); computeAll(); renderAll();
