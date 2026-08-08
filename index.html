@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- v3.4 · DRAM 사이클 모니터(스팟/계약가) -->
+<!-- v3.6 · 가격 레벨(진입/손절/목표·R:R) + 상대강도(RS) -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>모멘텀 투자 대시보드 v3.4</title>
+<title>모멘텀 투자 대시보드 v3.6</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -81,6 +81,27 @@
   .sig.lock{background:rgba(248,113,113,.08);color:#FCA5A5;border:1px dashed rgba(248,113,113,.4)}
   .reason{font-size:11px;color:var(--dim);margin-top:6px;min-height:16px}
 
+  /* ===== 3상태 분류 배지 (v3.5) ===== */
+  .cls{display:flex;align-items:center;gap:8px;margin-top:10px;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:help}
+  .cls.buy{background:rgba(52,211,153,.12);color:var(--green);border:1px solid rgba(52,211,153,.35)}
+  .cls.watch{background:rgba(251,191,36,.12);color:var(--yellow);border:1px solid rgba(251,191,36,.35)}
+  .cls.exit{background:rgba(248,113,113,.14);color:var(--red);border:1px solid rgba(248,113,113,.45)}
+  .cls .dist{margin-left:auto;font-family:var(--mono);font-weight:500;font-size:10.5px;color:var(--muted)}
+  .cls .caut{font-size:10px;opacity:.8}
+
+  /* 가격 레벨 + 상대강도 요약줄 (v3.6) */
+  .levels{margin-top:8px;font-size:11px;color:var(--muted);line-height:1.6}
+  .levels b{font-family:var(--mono);color:var(--ink);font-weight:600}
+  .levels .sep{margin:0 7px;color:var(--dim)}
+  .levels .dim{color:var(--dim)}
+
+  /* 분류 필터 바 */
+  .clsbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 12px}
+  .clsbar .f{background:var(--panel);border:1px solid var(--line);color:var(--muted);border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;font-family:var(--sans)}
+  .clsbar .f:hover{color:var(--ink);border-color:var(--dim)}
+  .clsbar .f.on{background:var(--amber);color:#1A1204;border-color:var(--amber);font-weight:700}
+  .clsbar .hint{font-size:11px;color:var(--dim);margin-left:6px}
+
   /* 눌림목 매수 타이밍 가이드 */
   .buytip{margin-top:10px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:8px;padding:9px 11px;font-size:11px;color:#FCD34D;line-height:1.65}
   .buytip b{color:var(--yellow)}
@@ -151,7 +172,7 @@
   <!-- ===== 헤더 ===== -->
   <header>
     <div class="brand">
-      <h1>모멘텀 투자 대시보드<span class="ver">v3.4</span></h1>
+      <h1>모멘텀 투자 대시보드<span class="ver">v3.6</span></h1>
       <p>좋은 기업 × 적정 가격 × 살아있는 모멘텀 — 세 가지가 모일 때만 진입한다</p>
     </div>
     <div class="spacer"></div>
@@ -179,6 +200,15 @@
     <div class="cell"><div class="num" style="color:var(--yellow)" id="cntPull">-</div><div class="lbl">🟡 눌림목 대기</div></div>
     <div class="cell"><div class="num dn" id="cntSell">-</div><div class="lbl">🔴 매도 신호</div></div>
     <div class="cell"><div class="num fl" id="cntWait">-</div><div class="lbl">⚪ 관망 · 데이터 부족</div></div>
+  </div>
+
+  <!-- ===== 분류 필터 (v3.5) ===== -->
+  <div class="clsbar" id="clsBar">
+    <button class="f on" data-f="ALL"           onclick="setClsFilter('ALL')">전체</button>
+    <button class="f"    data-f="EXIT_IMMINENT" onclick="setClsFilter('EXIT_IMMINENT')">🔴 청산임박</button>
+    <button class="f"    data-f="WATCH"         onclick="setClsFilter('WATCH')">🟡 관찰</button>
+    <button class="f"    data-f="BUY"           onclick="setClsFilter('BUY')">🟢 매수후보</button>
+    <span class="hint" id="clsHint">청산임박이 위로 정렬됩니다 · 배지에 마우스를 올리면 판단 근거가 보입니다</span>
   </div>
 
   <!-- ===== 종목 카드 ===== -->
@@ -298,6 +328,10 @@ let marketRed = false;
 let scoreHist = {}, scoreHistOK = true, scoreChartObj = null;   // v3 진단점수 이력
 let dramRows = [], dramOK = true, dramChartObj = null;          // v3.4 DRAM 사이클
 const DRAM_PRODUCT = 'DDR4 8Gb';
+let classMap = {}, clsOK = true, clsFilter = 'ALL';             // v3.5 3상태 분류
+const CLS_LABEL = {BUY:'🟢 매수후보', WATCH:'🟡 관찰', EXIT_IMMINENT:'🔴 청산임박'};
+const CLS_CSS   = {BUY:'buy', WATCH:'watch', EXIT_IMMINENT:'exit'};
+const CLS_ORDER = {EXIT_IMMINENT:0, WATCH:1, BUY:2};            // 리스크 먼저
 /* v3.2 소유자: URL의 ?u= 값(기본 jason). 사람별 종목 리스트를 나눔 */
 const currentOwner = ((new URLSearchParams(location.search)).get('u') || 'jason').trim() || 'jason';
 
@@ -325,6 +359,7 @@ async function init(){
   await loadPrices();
   await loadScoreHistory();
   await loadDram();
+  await loadClassification();
   computeAll();
   renderAll();
 }
@@ -345,6 +380,68 @@ async function loadScoreHistory(){
     scoreHistOK = false;   // 테이블 미생성 등 — 대시보드는 계속 동작
     console.warn('진단점수 이력 로드 실패(테이블 확인):', e.message);
   }
+}
+
+/* ---------- 3상태 분류 로드 (v3.5) ---------- */
+async function loadClassification(){
+  classMap = {};
+  try{
+    const {data, error} = await db.from('momentum_classification')
+      .select('ticker, state, exit_triggered, dist_to_exit_pct, earnings_momentum, volume_confirmed, valuation_caution, reasons, classified_at, atr, support_level, resistance_level, stop_loss, target_price, rr_ratio, rs_score, rs_label, benchmark');
+    if(error) throw error;
+    for(const r of (data||[])) classMap[r.ticker] = r;
+    clsOK = true;
+  }catch(e){
+    clsOK = false;   // 테이블 미생성 등 — 대시보드는 계속 동작
+    console.warn('분류 데이터 로드 실패(테이블 확인):', e.message);
+  }
+}
+
+/* 카드에 붙는 분류 배지 — 색만이 아니라 텍스트 라벨 병기(접근성) */
+function clsBadge(t){
+  const c = classMap[t];
+  if(!c) return '';
+  // 이미 이탈 확정된 종목에 '청산선까지 +N%'를 띄우면 여유 있어 보여 오해를 부름 → 상태를 명시
+  const dist = c.exit_triggered
+    ? `<span class="dist">이탈 확정</span>`
+    : ((c.dist_to_exit_pct==null) ? ''
+      : `<span class="dist">청산선까지 ${c.dist_to_exit_pct>=0?'+':''}${Number(c.dist_to_exit_pct).toFixed(1)}%</span>`);
+  const caut = c.valuation_caution ? `<span class="caut" title="사이클 종목 — 낮은 P/E가 저평가가 아닐 수 있음">⚠️사이클</span>` : '';
+  const reasons = (c.reasons||[]).map(r=>'• '+r).join('\n');
+  const tip = `${CLS_LABEL[c.state]||c.state}\n${reasons}`.replace(/"/g,'&quot;');
+  return `<div class="cls ${CLS_CSS[c.state]||''}" title="${tip}">
+    <span>${CLS_LABEL[c.state]||c.state}</span>${caut}${dist}
+  </div>`;
+}
+
+/* 가격 레벨(손절/목표/R:R) + 상대강도 — 카드 하단 요약줄 (v3.6) */
+function levelsRow(t){
+  const c = classMap[t];
+  if(!c) return '';
+  const parts = [];
+  if(c.stop_loss != null){
+    let seg = `🎯 손절 <b>${px(t, c.stop_loss)}</b>`;
+    if(c.target_price != null){
+      const rr = (c.rr_ratio!=null) ? c.rr_ratio.toFixed(1) : '-';
+      const rrCls = (c.rr_ratio>=2)?'up':(c.rr_ratio>=1?'':'dn');
+      seg += ` · 목표 <b>${px(t, c.target_price)}</b> · R:R <b class="${rrCls}">${rr}</b>`;
+    } else {
+      seg += ` · 목표 <span class="dim">비적용(이탈)</span>`;
+    }
+    parts.push(seg);
+  }
+  if(c.rs_score != null){
+    const rsCls = c.rs_label==='강세'?'up':(c.rs_label==='약세'?'dn':'fl');
+    parts.push(`RS ${c.benchmark||''} <b class="${rsCls}">${c.rs_score>=0?'+':''}${Number(c.rs_score).toFixed(1)}%p</b> ${c.rs_label||''}`);
+  }
+  if(!parts.length) return '';
+  return `<div class="levels">${parts.join('<span class="sep">·</span>')}</div>`;
+}
+
+function setClsFilter(f){
+  clsFilter = f;
+  document.querySelectorAll('#clsBar .f').forEach(b=>b.classList.toggle('on', b.dataset.f===f));
+  renderCards();
 }
 
 /* ---------- DRAM 사이클 모니터 (v3.4) ---------- */
@@ -620,7 +717,19 @@ function renderCards(){
     grid.innerHTML = `<div class="empty"><b>${currentOwner}</b> 님의 종목이 아직 없습니다. 아래 <b>종목 관리</b>에서 종목을 추가해 주세요.</div>`;
     return;
   }
-  grid.innerHTML = stocks.map(s=>{
+  // v3.5: 분류 필터 + 정렬(청산임박 먼저 — 리스크 우선)
+  let list = stocks.slice();
+  if(clsFilter !== 'ALL') list = list.filter(s => (classMap[s.ticker]||{}).state === clsFilter);
+  list.sort((a,b)=>{
+    const oa = CLS_ORDER[(classMap[a.ticker]||{}).state] ?? 9;
+    const ob = CLS_ORDER[(classMap[b.ticker]||{}).state] ?? 9;
+    return oa - ob || a.ticker.localeCompare(b.ticker);
+  });
+  if(!list.length){
+    grid.innerHTML = `<div class="empty">해당 상태의 종목이 없습니다.</div>`;
+    return;
+  }
+  grid.innerHTML = list.map(s=>{
     const c = computed[s.ticker];
     const chgCls = c.chgPct>0?'up':(c.chgPct<0?'dn':'fl');
     return `
@@ -634,6 +743,8 @@ function renderCards(){
         <span class="chg ${chgCls}">${c.hasData?(c.chgPct>=0?'+':'')+c.chgPct.toFixed(2)+'%':''}</span>
         <span style="font-size:10px;color:var(--dim);margin-left:auto">${c.lastDate||''}</span>
       </div>
+      ${clsBadge(s.ticker)}
+      ${levelsRow(s.ticker)}
       ${signalBadge(s,c)}
       <div class="reason">${c.reason||''}</div>
       ${railHTML(s.ticker,c)}
