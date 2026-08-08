@@ -1,0 +1,33 @@
+name: 3상태 분류 갱신
+
+# 분류는 '가격/점수 갱신 이후'에 재계산되어야 한다 (HANDOFF 5절).
+#   - 한국 시세 07:30 UTC  → 08:00 UTC 실행
+#   - 미국 시세 22:00 UTC  → 22:30 UTC 실행
+#   - 주간 점수 일 23:00 UTC → 다음날 08:00 UTC 실행분이 반영
+# classify.py 는 매번 전 종목을 계산하므로 이 자체가 백필이다.
+on:
+  schedule:
+    - cron: '0 8 * * 1-5'
+    - cron: '30 22 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install requests
+
+      - name: 분류 로직 단위 테스트 (인수 기준)
+        run: python scripts/test_classify.py
+
+      - name: 3상태 분류 계산 및 Supabase 저장
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: python scripts/classify.py
