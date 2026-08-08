@@ -37,7 +37,8 @@ def get_kr_tickers():
         timeout=30,
     )
     r.raise_for_status()
-    return [row["ticker"] for row in r.json() if is_kr(row["ticker"])]
+    # 소유자(owner) 여럿 → 고유 한국 티커만 (중복 수집 방지)
+    return list(dict.fromkeys(row["ticker"] for row in r.json() if is_kr(row["ticker"])))
 
 
 def fetch_and_upsert(ticker: str) -> int:
@@ -76,8 +77,12 @@ def fetch_and_upsert(ticker: str) -> int:
     return len(rows)
 
 
+# 상대강도(RS) 벤치마크 — 지수 시세도 종목처럼 적재 (FinanceDataReader가 지원)
+KR_BENCHMARKS = ["KS11", "KQ11"]   # KOSPI, KOSDAQ
+
 def main():
     tickers = get_kr_tickers()
+    tickers += [b for b in KR_BENCHMARKS if b not in tickers]
     print(f"한국 종목 {len(tickers)}개: {', '.join(tickers) if tickers else '(없음)'}")
     ok, fail = 0, 0
     for i, t in enumerate(tickers, 1):

@@ -22,7 +22,8 @@ def get_active_tickers():
         timeout=30,
     )
     r.raise_for_status()
-    return [row["ticker"] for row in r.json()]
+    # 소유자(owner)가 여럿이라 같은 티커가 중복될 수 있음 → 고유 티커만 (API 절약)
+    return list(dict.fromkeys(row["ticker"] for row in r.json()))
 
 def fetch_prices(ticker, bars=30):
     r = requests.get(
@@ -57,8 +58,13 @@ def upsert_prices(rows):
     )
     r.raise_for_status()
 
+# 상대강도(RS) 벤치마크 — 종목처럼 시세를 받아둔다 (momentum_stocks엔 없어 카드로는 안 뜸)
+US_BENCHMARKS = ["SPY", "SOXX"]
+
 def main():
     tickers = get_active_tickers()
+    # 이미 목록에 있지 않은 벤치마크만 뒤에 추가 (RS 최신 유지)
+    tickers += [b for b in US_BENCHMARKS if b not in tickers]
     print(f"대상 종목 {len(tickers)}개: {', '.join(tickers)}")
     ok, fail = 0, 0
     for i, t in enumerate(tickers, 1):
@@ -77,4 +83,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
