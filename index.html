@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- v3.6 · 가격 레벨(진입/손절/목표·R:R) + 상대강도(RS) -->
+<!-- v3.7 · RS 추이(개선/악화) + 상태×RS 해석 가이드 -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>모멘텀 투자 대시보드 v3.6</title>
+<title>모멘텀 투자 대시보드 v3.7</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -95,6 +95,21 @@
   .levels .sep{margin:0 7px;color:var(--dim)}
   .levels .dim{color:var(--dim)}
 
+  /* 상태×RS 해석 가이드 (v3.7) */
+  details.guide{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin:0 0 12px}
+  details.guide summary{padding:11px 16px;font-weight:700;cursor:pointer;font-size:13px;list-style:none;color:var(--amber)}
+  details.guide summary::before{content:'▸ '}
+  details.guide[open] summary::before{content:'▾ '}
+  .guide .gbody{padding:0 16px 16px}
+  .guide .gnote{font-size:11.5px;color:var(--muted);line-height:1.7;margin:8px 0}
+  .guide .gtab{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0}
+  .guide .gtab th{text-align:left;color:var(--muted);font-weight:500;padding:7px 8px;border-bottom:1px solid var(--line);font-size:11px}
+  .guide .gtab td{padding:8px;border-bottom:1px solid var(--panel2);vertical-align:top}
+  .guide .gb{display:inline-block;border-radius:5px;padding:1px 6px;font-size:10.5px;font-weight:700}
+  .guide .gb.buy{background:rgba(52,211,153,.14);color:var(--green)}
+  .guide .gb.watch{background:rgba(251,191,36,.14);color:var(--yellow)}
+  .guide .gb.exit{background:rgba(248,113,113,.16);color:var(--red)}
+
   /* 분류 필터 바 */
   .clsbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 12px}
   .clsbar .f{background:var(--panel);border:1px solid var(--line);color:var(--muted);border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;font-family:var(--sans)}
@@ -172,7 +187,7 @@
   <!-- ===== 헤더 ===== -->
   <header>
     <div class="brand">
-      <h1>모멘텀 투자 대시보드<span class="ver">v3.6</span></h1>
+      <h1>모멘텀 투자 대시보드<span class="ver">v3.7</span></h1>
       <p>좋은 기업 × 적정 가격 × 살아있는 모멘텀 — 세 가지가 모일 때만 진입한다</p>
     </div>
     <div class="spacer"></div>
@@ -210,6 +225,25 @@
     <button class="f"    data-f="BUY"           onclick="setClsFilter('BUY')">🟢 매수후보</button>
     <span class="hint" id="clsHint">청산임박이 위로 정렬됩니다 · 배지에 마우스를 올리면 판단 근거가 보입니다</span>
   </div>
+
+  <!-- ===== 상태 × RS 해석 가이드 (v3.7) ===== -->
+  <details class="guide">
+    <summary>📖 상태 × 상대강도(RS) 해석 가이드</summary>
+    <div class="gbody">
+      <p class="gnote"><b>RS</b> = 이 종목의 60일 수익률 − 벤치마크(SOXX/SPY/KOSPI 등) 60일 수익률(%p). <b>양수=시장보다 강함</b>. 라벨: 강세 ≥ +5%p · 중립 −5~+5 · 약세 ≤ −5%p. <b>추이(↑개선/↓악화)</b>는 20거래일 전 RS 대비 변화.</p>
+      <table class="gtab">
+        <thead><tr><th>상태 × RS</th><th>해석</th><th>행동 힌트</th></tr></thead>
+        <tbody>
+          <tr><td><span class="gb buy">BUY/WATCH</span> + <span class="up">강세</span></td><td>상승 추세 + 시장 주도주</td><td>가장 강한 후보 (대장주)</td></tr>
+          <tr><td><span class="gb watch">WATCH</span> + <span class="up">강세</span></td><td>주도주의 눌림목</td><td>진입 타이밍 관찰 대상</td></tr>
+          <tr><td><span class="gb exit">EXIT</span> + <span class="up">강세</span></td><td>깨졌으나 여전히 상대 우위</td><td>마지막에 무너지고 먼저 반등 — 안정 시 다음 주도주</td></tr>
+          <tr><td><span class="gb exit">EXIT</span> + <span class="dn">약세</span></td><td>붕괴 + 낙오 (이중 적신호)</td><td>가장 약함 — 우선 회피/청산</td></tr>
+          <tr><td><span class="dn">약세</span> + 저평가처럼 보임</td><td>싸 보이나 계속 뒤처짐</td><td>⚠️ 가치 함정 경고 (물타기 금지)</td></tr>
+        </tbody>
+      </table>
+      <p class="gnote">💡 <b>RS는 "상대"지 "절대"가 아님</b> — 강세여도 절대주가는 내릴 수 있습니다. 하락장에선 강세 RS = "반등 장바구니"(지금 사라는 뜻 아님). <b>추이 ↑개선</b>은 주도력이 살아나는 신호, <b>↓악화</b>는 힘이 빠지는 신호. RS는 단독 트리거가 아니라 <b>상태·진단점수·가격레벨과 함께</b> 보는 필터입니다.</p>
+    </div>
+  </details>
 
   <!-- ===== 종목 카드 ===== -->
   <div class="grid" id="cardGrid">
@@ -386,8 +420,8 @@ async function loadScoreHistory(){
 async function loadClassification(){
   classMap = {};
   try{
-    const {data, error} = await db.from('momentum_classification')
-      .select('ticker, state, exit_triggered, dist_to_exit_pct, earnings_momentum, volume_confirmed, valuation_caution, reasons, classified_at, atr, support_level, resistance_level, stop_loss, target_price, rr_ratio, rs_score, rs_label, benchmark');
+    // select('*') — 새 컬럼(rs_trend 등)이 아직 DB에 없어도 조회가 실패하지 않도록 (배포 순서 의존 제거)
+    const {data, error} = await db.from('momentum_classification').select('*');
     if(error) throw error;
     for(const r of (data||[])) classMap[r.ticker] = r;
     clsOK = true;
@@ -432,7 +466,15 @@ function levelsRow(t){
   }
   if(c.rs_score != null){
     const rsCls = c.rs_label==='강세'?'up':(c.rs_label==='약세'?'dn':'fl');
-    parts.push(`RS ${c.benchmark||''} <b class="${rsCls}">${c.rs_score>=0?'+':''}${Number(c.rs_score).toFixed(1)}%p</b> ${c.rs_label||''}`);
+    let rsSeg = `RS ${c.benchmark||''} <b class="${rsCls}">${c.rs_score>=0?'+':''}${Number(c.rs_score).toFixed(1)}%p</b> ${c.rs_label||''}`;
+    if(c.rs_trend_label){
+      const tl = c.rs_trend_label;
+      const arrow = tl==='개선'?'↑':(tl==='악화'?'↓':'→');
+      const tCls  = tl==='개선'?'up':(tl==='악화'?'dn':'fl');
+      const tv = (c.rs_trend!=null) ? ` ${c.rs_trend>=0?'+':''}${Number(c.rs_trend).toFixed(1)}` : '';
+      rsSeg += ` <span class="${tCls}" title="20거래일 전 RS 대비 변화">${arrow}${tl}${tv}</span>`;
+    }
+    parts.push(rsSeg);
   }
   if(!parts.length) return '';
   return `<div class="levels">${parts.join('<span class="sep">·</span>')}</div>`;
