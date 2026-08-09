@@ -49,6 +49,8 @@ CONFIG = {
     "rs_lookback":            60,    # 상대강도 비교 기간(거래일)
     "rs_strong_pp":           5.0,   # 벤치 대비 초과수익 이상이면 '강세'
     "rs_weak_pp":            -5.0,   # 이하면 '약세'
+    "rs_trend_shift":         20,    # RS 추이: 며칠 전 RS와 비교(≈1개월)
+    "rs_trend_band":          2.0,   # |변화폭| 이 이하면 '유지'
 }
 
 # 상대강도 벤치마크 매핑 (US 반도체→SOXX, US 기타→SPY, KR→시장지수)
@@ -166,14 +168,33 @@ def price_levels(current, atr_val, support, resistance):
     return out
 
 
+def rs_at(stock_closes, bench_closes, offset=0):
+    """offset 거래일 전 시점의 상대강도(%p). offset=0 이면 현재."""
+    lb = CONFIG["rs_lookback"]
+    need = lb + offset + 1
+    if len(stock_closes) < need or len(bench_closes) < need:
+        return None
+    i = -1 - offset
+    s_ret = stock_closes[i] / stock_closes[i - lb] - 1
+    b_ret = bench_closes[i] / bench_closes[i - lb] - 1
+    return (s_ret - b_ret) * 100
+
+
 def relative_strength(stock_closes, bench_closes):
     """벤치마크 대비 초과수익(%p) — 같은 시장이라 위치 정렬로 근사."""
-    lb = CONFIG["rs_lookback"]
-    if len(stock_closes) <= lb or len(bench_closes) <= lb:
-        return None
-    s_ret = stock_closes[-1] / stock_closes[-1 - lb] - 1
-    b_ret = bench_closes[-1] / bench_closes[-1 - lb] - 1
-    return (s_ret - b_ret) * 100
+    return rs_at(stock_closes, bench_closes, 0)
+
+
+def rs_trend_of(stock_closes, bench_closes):
+    """현재 RS − shift거래일 전 RS = 추이(%p). (변화폭, 라벨) 반환."""
+    now = rs_at(stock_closes, bench_closes, 0)
+    prev = rs_at(stock_closes, bench_closes, CONFIG["rs_trend_shift"])
+    if now is None or prev is None:
+        return None, None
+    trend = now - prev
+    band = CONFIG["rs_trend_band"]
+    label = "개선" if trend > band else ("악화" if trend < -band else "유지")
+    return trend, label
 
 
 def rs_label_of(rs):
@@ -321,8 +342,12 @@ def compute_signals(closes, lows, volumes, scores, ticker, highs=None, bench_clo
     rs = relative_strength(closes, bench_closes) if bench_closes else None
     s["rs_score"] = rs
     s["rs_label"] = rs_label_of(rs)
+    rs_trend, rs_trend_label = rs_trend_of(closes, bench_closes) if bench_closes else (None, None)
+    s["rs_trend"] = rs_trend
+    s["rs_trend_label"] = rs_trend_label
     if rs is not None:
-        s["reasons"].append(f"상대강도 {s['benchmark']} 대비 {rs:+.1f}%p({s['rs_label']})")
+        tr = f", 추이 {rs_trend:+.1f}%p({rs_trend_label})" if rs_trend is not None else ""
+        s["reasons"].append(f"상대강도 {s['benchmark']} 대비 {rs:+.1f}%p({s['rs_label']}){tr}")
 
     return s
 
@@ -416,6 +441,8 @@ def save(ticker, state, s):
         "rr_ratio":         _r(s.get("rr_ratio"), 2),
         "rs_score":         _r(s.get("rs_score"), 2),
         "rs_label":         s.get("rs_label"),
+        "rs_trend":         _r(s.get("rs_trend"), 2),
+        "rs_trend_label":   s.get("rs_trend_label"),
         "benchmark":        s.get("benchmark"),
     }
     r = requests.post(f"{SUPABASE_URL}/rest/v1/momentum_classification",
