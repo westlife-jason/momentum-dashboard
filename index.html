@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- v3.7 · RS 추이(개선/악화) + 상태×RS 해석 가이드 -->
+<!-- v3.8 · 추세 구조(되돌림/저점구조)+매물대 + 코스피 시장 패널 -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>모멘텀 투자 대시보드 v3.7</title>
+<title>모멘텀 투자 대시보드 v3.8</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -135,6 +135,24 @@
   .metrics .v{font-family:var(--mono);font-size:13px;font-weight:600}
   .metrics .k{font-size:9.5px;color:var(--dim);margin-top:1px}
 
+  /* ===== 시장 추세 패널 (v3.8) ===== */
+  .mkgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+  .mkcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .mkcard .mktop{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+  .mkcard .mknm{font-size:15px;font-weight:900}
+  .mkcard .mkpx{font-family:var(--mono);font-size:20px;font-weight:600;margin-left:auto}
+  .mkstruct{display:inline-block;border-radius:6px;padding:2px 9px;font-size:11.5px;font-weight:700}
+  .mkstruct.up{background:rgba(52,211,153,.14);color:var(--green)}
+  .mkstruct.dn{background:rgba(248,113,113,.14);color:var(--red)}
+  .mkstruct.fl{background:rgba(138,151,172,.12);color:var(--muted)}
+  /* 되돌림 바 */
+  .retbar{margin-top:12px}
+  .retbar .rt{position:relative;height:10px;border-radius:5px;background:var(--panel2);overflow:hidden}
+  .retbar .fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,rgba(248,113,113,.5),rgba(251,191,36,.5),rgba(52,211,153,.55))}
+  .retbar .mid{position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--ink);opacity:.6}
+  .retbar .lbl{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:5px}
+  .mknote{font-size:11.5px;color:var(--muted);line-height:1.6;margin-top:10px}
+
   /* ===== DRAM 사이클 모니터 ===== */
   .dram-head{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-bottom:12px}
   .dram-sig{display:inline-flex;align-items:center;border-radius:8px;padding:5px 12px;font-size:13px;font-weight:700}
@@ -187,7 +205,7 @@
   <!-- ===== 헤더 ===== -->
   <header>
     <div class="brand">
-      <h1>모멘텀 투자 대시보드<span class="ver">v3.7</span></h1>
+      <h1>모멘텀 투자 대시보드<span class="ver">v3.8</span></h1>
       <p>좋은 기업 × 적정 가격 × 살아있는 모멘텀 — 세 가지가 모일 때만 진입한다</p>
     </div>
     <div class="spacer"></div>
@@ -249,6 +267,14 @@
   <div class="grid" id="cardGrid">
     <div class="empty" id="emptyMsg">데이터를 불러오는 중입니다…</div>
   </div>
+
+  <!-- ===== 코스피·코스닥 시장 추세 (v3.8) ===== -->
+  <section id="marketSec">
+    <h2>시장 추세 <span>지수 되돌림 · 저점구조 — 하락이 멈췄나 / 반등이 찐인가</span></h2>
+    <div class="mkgrid" id="mkGrid">
+      <div class="empty" style="grid-column:1/-1">시장 추세 데이터를 불러오는 중…</div>
+    </div>
+  </section>
 
   <!-- ===== DRAM 사이클 모니터 ===== -->
   <section id="dramSec">
@@ -394,6 +420,7 @@ async function init(){
   await loadScoreHistory();
   await loadDram();
   await loadClassification();
+  await loadMarket();
   computeAll();
   renderAll();
 }
@@ -478,6 +505,71 @@ function levelsRow(t){
   }
   if(!parts.length) return '';
   return `<div class="levels">${parts.join('<span class="sep">·</span>')}</div>`;
+}
+
+/* ---------- 시장 추세 패널 (v3.8) ---------- */
+let marketPx = {};
+const MK_NAMES = {KS11:'코스피', KQ11:'코스닥'};
+
+async function loadMarket(){
+  marketPx = {};
+  for(const ix of ['KS11','KQ11']){
+    try{
+      const {data} = await db.from('momentum_prices')
+        .select('close,trade_date').eq('ticker', ix)
+        .order('trade_date',{ascending:false}).limit(1);
+      if(data && data.length) marketPx[ix] = {close:Number(data[0].close), date:data[0].trade_date};
+    }catch(e){ console.warn('시장 지수 로드 실패', ix, e.message); }
+  }
+}
+
+function renderMarket(){
+  const grid = $('mkGrid');
+  const cards = ['KS11','KQ11'].map(ix=>{
+    const c = classMap[ix], p = marketPx[ix];
+    if(!c || c.retrace_pct==null || !p){
+      return `<div class="mkcard"><div class="mktop"><span class="mknm">${MK_NAMES[ix]}</span></div>
+        <div class="mknote">추세 데이터가 아직 없습니다 — <b>trend_structure_setup.sql</b> 실행 + 분류 갱신 후 표시됩니다.</div></div>`;
+    }
+    const st = c.trend_structure;
+    const stCls = st==='상승구조'?'up':(st==='하락구조'?'dn':'fl');
+    const rp = Math.max(0, Math.min(100, Number(c.retrace_pct)));
+    const half = c.swing_trough + (c.swing_peak - c.swing_trough)*0.5;
+    const fmtIx = n => Number(n).toLocaleString('ko-KR',{maximumFractionDigits:0});
+    const read = (st==='하락구조')
+      ? '저점이 낮아지는 중 — 아직 하락 우위. 되돌림 50% 회복·저점 반등 확인 전엔 관망.'
+      : (rp>=50 ? '되돌림 50% 이상 + 저점 방어 — 반등에 힘이 실리는 국면(거래량 동반 확인).'
+               : '저점은 높아지나 되돌림은 아직 절반 미만 — 바닥 다지는 초기, 확인 필요.');
+    return `
+    <div class="mkcard">
+      <div class="mktop">
+        <span class="mknm">${MK_NAMES[ix]}</span>
+        <span class="mkstruct ${stCls}">${st||'-'}</span>
+        <span class="mkpx">${fmtIx(p.close)}</span>
+      </div>
+      <div class="retbar">
+        <div class="rt"><div class="fill" style="width:${rp}%"></div><div class="mid" title="50% 되돌림"></div></div>
+        <div class="lbl"><span>저점 ${fmtIx(c.swing_trough)}</span><span>50% ${fmtIx(half)}</span><span>고점 ${fmtIx(c.swing_peak)}</span></div>
+      </div>
+      <div class="mknote">되돌림 <b class="${rp>=50?'up':(rp<33?'dn':'')}">${rp.toFixed(0)}%</b> 회복 · ${read}</div>
+    </div>`;
+  }).join('');
+  grid.innerHTML = cards;
+}
+
+/* 추세 구조 요약줄 — 되돌림% + 저점구조 (v3.8) */
+function structRow(t){
+  const c = classMap[t];
+  if(!c || c.retrace_pct==null) return '';
+  const st = c.trend_structure;
+  const stCls = st==='상승구조'?'up':(st==='하락구조'?'dn':'fl');
+  const rp = Number(c.retrace_pct);
+  const rpCls = rp>=50?'up':(rp<33?'dn':'fl');
+  const half = (c.swing_peak!=null && c.swing_trough!=null)
+    ? ` <span class="dim">(50%=${px(t, c.swing_trough + (c.swing_peak-c.swing_trough)*0.5)})</span>` : '';
+  const wall = (c.vp_resistance!=null)
+    ? `<span class="sep">·</span><span title="현재가 위 최근접 거래량 밀집대(1차 저항)">🧱 1차 저항 <b>${px(t, c.vp_resistance)}</b></span>` : '';
+  return `<div class="levels"><span title="고점→저점 하락의 회복 비율">🧭 되돌림 <b class="${rpCls}">${rp.toFixed(0)}%</b>${half}</span><span class="sep">·</span><span class="${stCls}">${st||''}</span>${wall}</div>`;
 }
 
 function setClsFilter(f){
@@ -787,6 +879,7 @@ function renderCards(){
       </div>
       ${clsBadge(s.ticker)}
       ${levelsRow(s.ticker)}
+      ${structRow(s.ticker)}
       ${signalBadge(s,c)}
       <div class="reason">${c.reason||''}</div>
       ${railHTML(s.ticker,c)}
@@ -924,6 +1017,7 @@ function renderAll(){
   if(!selected && stocks.length) selected = stocks[0].ticker;
   renderChart();
   renderDram();
+  renderMarket();
 }
 
 /* ---------- 5. 시세 업데이트 (Twelve Data) ---------- */
