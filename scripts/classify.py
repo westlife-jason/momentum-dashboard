@@ -53,7 +53,8 @@ CONFIG = {
     "rs_trend_band":          2.0,   # |변화폭| 이 이하면 '유지'
     # v3.8 추세 구조 + 매물대
     "struct_lookback":        90,    # 추세구조/되돌림 관찰 구간(거래일)
-    "struct_band_pct":        1.0,   # 저점 비교 시 이 % 이내면 '횡보'
+    "struct_band_pct":        1.0,   # 고점·저점 비교 시 이 % 이내면 '유지'로 간주
+    "swing_pivot_k":          5,     # 스윙 피벗: 좌우 이 봉수 내 최고/최저면 피벗으로 인정
     "vp_lookback":            90,    # 매물대 관찰 구간
     "vp_bins":                24,    # 매물대 가격 구간 수
     "vp_node_mult":           1.4,   # 평균 대비 이 배수 이상 거래량이면 '매물벽'
@@ -238,20 +239,72 @@ def retracement_frame(highs, lows, close):
     return peak, trough, retr
 
 
-def trend_structure(highs, lows):
-    """저점 구조: 관찰구간을 반으로 나눠 최근 저점이 이전 저점보다 높으면 상승구조.
-    반환 '상승구조' | '하락구조' | '횡보'."""
-    look = CONFIG["struct_lookback"]
-    l = lows[-look:] if len(lows) >= look else lows[:]
-    if len(l) < 20:
+def _swing_points(vals, k, want_high):
+    """스윙 피벗: 좌우 k봉 내 최고(고점)/최저(저점)인 지점. 인접 중복은 더 극단값만 유지.
+    반환 [(index, value), ...] (시간순)."""
+    pts = []
+    for i in range(k, len(vals) - k):
+        w = vals[i - k:i + k + 1]
+        is_piv = (vals[i] >= max(w)) if want_high else (vals[i] <= min(w))
+        if not is_piv:
+            continue
+        if pts and i - pts[-1][0] <= k:   # 직전 피벗과 너무 붙으면 더 극단값만
+            more = vals[i] > pts[-1][1] if want_high else vals[i] < pts[-1][1]
+            if more:
+                pts[-1] = (i, vals[i])
+        else:
+            pts.append((i, vals[i]))
+    return pts
+
+
+def _lin_trend(pts, band_pct):
+    """피벗들의 회귀 추세: 최소제곱 회귀선의 첫→끝 변화율(%)로
+    상승(+1)/하락(-1)/유지(0). 최근 한 번의 눌림에 흔들리지 않게 전체를 본다."""
+    n = len(pts)
+    if n < 2:
         return None
-    mid = len(l) // 2
-    low_prev, low_recent = min(l[:mid]), min(l[mid:])
-    band = low_prev * CONFIG["struct_band_pct"] / 100
-    if low_recent > low_prev + band:
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    denom = sum((x - mx) ** 2 for x in xs)
+    if denom == 0 or my == 0:
+        return 0
+    slope = sum((xs[i] - mx) * (ys[i] - my) for i in range(n)) / denom
+    change_pct = slope * (xs[-1] - xs[0]) / my * 100   # 회귀선 전체 변화율(%)
+    if change_pct > band_pct:
+        return 1
+    if change_pct < -band_pct:
+        return -1
+    return 0
+
+
+def trend_structure(highs, lows):
+    """다우이론식 구조 — 관찰구간 '전체' 스윙 고점/저점의 회귀 추세로 판정.
+      상승구조 = 고점 추세↑ & 저점 추세↑  | 하락구조 = 고점↓ & 저점↓
+      수렴     = 저점↑ & 고점↓            | 그 외(한쪽 유지·확산) = 횡보
+    최근 두 스윙만 보던 방식(눌림에 오판)을 회귀 추세로 바꿔 큰 추세를 잡는다.
+    피벗이 부족하면 반-분할 최고/최저로 폴백."""
+    look = CONFIG["struct_lookback"]
+    h = highs[-look:] if len(highs) >= look else highs[:]
+    l = lows[-look:] if len(lows) >= look else lows[:]
+    if len(l) < 20 or len(h) < 20:
+        return None
+    k = CONFIG["swing_pivot_k"]
+    band = CONFIG["struct_band_pct"]
+    hi, lo = _swing_points(h, k, True), _swing_points(l, k, False)
+    if len(hi) < 2 or len(lo) < 2:        # 피벗 부족 → 반 분할 2점으로 폴백
+        mid = len(l) // 2
+        hi = [(0, max(h[:mid])), (len(h) - 1, max(h[mid:]))]
+        lo = [(0, min(l[:mid])), (len(l) - 1, min(l[mid:]))]
+    th = _lin_trend(hi, band)             # 고점 추세
+    tl = _lin_trend(lo, band)             # 저점 추세
+    if th > 0 and tl > 0:
         return "상승구조"
-    if low_recent < low_prev - band:
+    if th < 0 and tl < 0:
         return "하락구조"
+    if tl > 0 and th < 0:
+        return "수렴"
     return "횡보"
 
 
