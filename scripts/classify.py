@@ -51,7 +51,16 @@ CONFIG = {
     "rs_weak_pp":            -5.0,   # 이하면 '약세'
     "rs_trend_shift":         20,    # RS 추이: 며칠 전 RS와 비교(≈1개월)
     "rs_trend_band":          2.0,   # |변화폭| 이 이하면 '유지'
+    # v3.8 추세 구조 + 매물대
+    "struct_lookback":        90,    # 추세구조/되돌림 관찰 구간(거래일)
+    "struct_band_pct":        1.0,   # 저점 비교 시 이 % 이내면 '횡보'
+    "vp_lookback":            90,    # 매물대 관찰 구간
+    "vp_bins":                24,    # 매물대 가격 구간 수
+    "vp_node_mult":           1.4,   # 평균 대비 이 배수 이상 거래량이면 '매물벽'
 }
+
+# 시장 지수도 분류에 태워 되돌림/저점구조를 계산(대시보드 시장 패널이 읽음)
+MARKET_INDICES = ["KS11", "KQ11"]   # KOSPI, KOSDAQ
 
 # 상대강도 벤치마크 매핑 (US 반도체→SOXX, US 기타→SPY, KR→시장지수)
 BENCHMARK_MAP = {
@@ -61,6 +70,8 @@ BENCHMARK_MAP = {
 }
 
 def benchmark_for(ticker):
+    if ticker in ("KS11", "KQ11"):
+        return ticker          # 지수는 자기 자신 → RS=0 (패널에선 RS 미표시)
     if ticker in BENCHMARK_MAP:
         return BENCHMARK_MAP[ticker]
     return "KS11" if (ticker.isdigit() and len(ticker) == 6) else "SPY"
@@ -207,6 +218,75 @@ def rs_label_of(rs):
     return "중립"
 
 
+def retracement_frame(highs, lows, close):
+    """되돌림: 최근 고점 → 그 이후 저점 하락의 몇 %를 회복했나.
+    반환 (peak, trough, retrace_pct). 데이터 부족/무의미 시 (None,None,None)."""
+    look = CONFIG["struct_lookback"]
+    h = highs[-look:] if len(highs) >= look else highs[:]
+    l = lows[-look:] if len(lows) >= look else lows[:]
+    if len(h) < 10 or close is None:
+        return None, None, None
+    pk_i = max(range(len(h)), key=lambda i: h[i])
+    peak = h[pk_i]
+    after = l[pk_i:]                      # 고점 이후 구간
+    if not after:
+        return None, None, None
+    trough = min(after)
+    if peak <= trough:
+        return None, None, None
+    retr = (close - trough) / (peak - trough) * 100
+    return peak, trough, retr
+
+
+def trend_structure(highs, lows):
+    """저점 구조: 관찰구간을 반으로 나눠 최근 저점이 이전 저점보다 높으면 상승구조.
+    반환 '상승구조' | '하락구조' | '횡보'."""
+    look = CONFIG["struct_lookback"]
+    l = lows[-look:] if len(lows) >= look else lows[:]
+    if len(l) < 20:
+        return None
+    mid = len(l) // 2
+    low_prev, low_recent = min(l[:mid]), min(l[mid:])
+    band = low_prev * CONFIG["struct_band_pct"] / 100
+    if low_recent > low_prev + band:
+        return "상승구조"
+    if low_recent < low_prev - band:
+        return "하락구조"
+    return "횡보"
+
+
+def volume_profile(highs, lows, closes, volumes, close):
+    """매물대: 종가를 가격 구간으로 나눠 거래량 밀집대를 찾는다.
+    반환 dict(poc, resistance, support). 데이터 부족 시 값들 None."""
+    out = {"poc": None, "resistance": None, "support": None}
+    look = CONFIG["vp_lookback"]
+    c = closes[-look:] if len(closes) >= look else closes[:]
+    v = volumes[-look:] if len(volumes) >= look else volumes[:]
+    n = min(len(c), len(v))
+    if n < 20 or close is None:
+        return out
+    c, v = c[-n:], v[-n:]
+    lo, hi = min(c), max(c)
+    if hi <= lo:
+        return out
+    bins = CONFIG["vp_bins"]
+    width = (hi - lo) / bins
+    vol = [0.0] * bins
+    for price, volu in zip(c, v):
+        bi = min(bins - 1, int((price - lo) / width))
+        vol[bi] += volu
+    centers = [lo + (i + 0.5) * width for i in range(bins)]
+    out["poc"] = centers[max(range(bins), key=lambda i: vol[i])]
+    avg = sum(vol) / bins
+    thresh = avg * CONFIG["vp_node_mult"]
+    nodes = [centers[i] for i in range(bins) if vol[i] >= thresh]
+    above = [p for p in nodes if p > close * 1.005]
+    below = [p for p in nodes if p < close * 0.995]
+    out["resistance"] = min(above) if above else None   # 현재가 위 최근접 매물벽
+    out["support"] = max(below) if below else None      # 현재가 아래 최근접 매물벽
+    return out
+
+
 def earnings_momentum_from(scores):
     """진단점수 이력의 최근 변화 부호로 대체 (컨센서스 수정 데이터 없음).
     scores: 오래된→최신 순 점수 리스트. 반환: (모멘텀, 근거문자열)"""
@@ -314,8 +394,21 @@ def compute_signals(closes, lows, volumes, scores, ticker, highs=None, bench_clo
     else:
         s["reasons"].append("valuation 데이터 없음(게이트 통과 처리)")
 
+    # --- 추세 구조 + 매물대 (v3.8) ---
+    if highs:
+        peak, trough, retr = retracement_frame(highs, lows, close)
+        s["swing_peak"], s["swing_trough"], s["retrace_pct"] = peak, trough, retr
+        s["trend_structure"] = trend_structure(highs, lows)
+        vp = volume_profile(highs, lows, closes, volumes, close)
+        s["vp_poc"], s["vp_resistance"], s["vp_support"] = vp["poc"], vp["resistance"], vp["support"]
+        if retr is not None:
+            s["reasons"].append(f"되돌림 {retr:.0f}% · {s['trend_structure'] or ''}")
+        if vp["resistance"] is not None:
+            s["reasons"].append(f"매물벽 저항 {vp['resistance']:.2f}")
+
     # --- 가격 레벨 (ATR 기반 손절/목표/손익비) v3.6 ---
     atr_val = atr(highs, lows, closes) if highs else None
+    # 목표=전고점(진짜 목표, R:R 의미 유지). 매물벽(vp_resistance)은 '1차 저항' 정보로 별도 표시.
     resistance = swing_high_of(highs) if highs else None
     s["atr"] = atr_val
     s["resistance_level"] = resistance
@@ -444,6 +537,14 @@ def save(ticker, state, s):
         "rs_trend":         _r(s.get("rs_trend"), 2),
         "rs_trend_label":   s.get("rs_trend_label"),
         "benchmark":        s.get("benchmark"),
+        # v3.8 추세 구조 + 매물대
+        "retrace_pct":      _r(s.get("retrace_pct"), 1),
+        "swing_peak":       _r(s.get("swing_peak"), 4),
+        "swing_trough":     _r(s.get("swing_trough"), 4),
+        "trend_structure":  s.get("trend_structure"),
+        "vp_poc":           _r(s.get("vp_poc"), 4),
+        "vp_resistance":    _r(s.get("vp_resistance"), 4),
+        "vp_support":       _r(s.get("vp_support"), 4),
     }
     r = requests.post(f"{SUPABASE_URL}/rest/v1/momentum_classification",
                       headers={**HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
@@ -455,6 +556,7 @@ def main():
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise SystemExit("SUPABASE_URL / SUPABASE_ANON_KEY 환경변수가 필요합니다.")
     tickers = get_active_tickers()
+    tickers += [ix for ix in MARKET_INDICES if ix not in tickers]   # 시장 지수도 분류(시장 패널용)
     print(f"분류 대상 {len(tickers)}종목: {', '.join(tickers)}")
     ok = fail = 0
     counts = {"BUY": 0, "WATCH": 0, "EXIT_IMMINENT": 0}
